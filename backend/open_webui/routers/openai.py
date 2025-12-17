@@ -32,7 +32,7 @@ from open_webui.env import (
     ENABLE_FORWARD_USER_INFO_HEADERS,
     BYPASS_MODEL_ACCESS_CONTROL,
 )
-from open_webui.models.users import UserModel
+from open_webui.models.users import UserModel, Users
 
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.env import SRC_LOG_LEVELS
@@ -61,6 +61,29 @@ log.setLevel(SRC_LOG_LEVELS["OPENAI"])
 # Utility functions
 #
 ##########################################
+
+
+def get_user_api_key_for_connection(user: UserModel, connection_id: str) -> Optional[str]:
+    """获取用户为特定连接配置的API密钥"""
+    if not user:
+        return None
+    user_data = Users.get_user_by_id(user.id)
+    if user_data and user_data.settings:
+        api_keys = user_data.settings.api_keys or {}
+        return api_keys.get(connection_id)
+    return None
+
+
+def get_connection_id_for_url_idx(request: Request, idx: int) -> Optional[str]:
+    """根据URL索引获取对应的全局连接ID"""
+    connections = request.app.state.config.GLOBAL_CONNECTIONS or []
+    url = request.app.state.config.OPENAI_API_BASE_URLS[idx] if idx < len(request.app.state.config.OPENAI_API_BASE_URLS) else None
+    if not url:
+        return None
+    for conn in connections:
+        if conn.get("url", "").rstrip("/") == url.rstrip("/") and conn.get("type") == "openai":
+            return conn.get("id")
+    return None
 
 
 async def send_get_request(url, key=None, user: UserModel = None):
@@ -346,28 +369,24 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
     if not request.app.state.config.ENABLE_OPENAI_API:
         return []
 
+    # 直接使用管理员配置的API密钥（从OPENAI_API_KEYS获取）
+    # 不再使用用户连接表
+
     # Check if API KEYS length is same than API URLS length
     num_urls = len(request.app.state.config.OPENAI_API_BASE_URLS)
-    num_keys = len(request.app.state.config.OPENAI_API_KEYS)
-
-    if num_keys != num_urls:
-        # if there are more keys than urls, remove the extra keys
-        if num_keys > num_urls:
-            new_keys = request.app.state.config.OPENAI_API_KEYS[:num_urls]
-            request.app.state.config.OPENAI_API_KEYS = new_keys
-        # if there are more urls than keys, add empty keys
-        else:
-            request.app.state.config.OPENAI_API_KEYS += [""] * (num_urls - num_keys)
 
     request_tasks = []
     for idx, url in enumerate(request.app.state.config.OPENAI_API_BASE_URLS):
+        # 使用管理员配置的密钥
+        key = request.app.state.config.OPENAI_API_KEYS[idx] if idx < len(request.app.state.config.OPENAI_API_KEYS) else ""
+
         if (str(idx) not in request.app.state.config.OPENAI_API_CONFIGS) and (
             url not in request.app.state.config.OPENAI_API_CONFIGS  # Legacy support
         ):
             request_tasks.append(
                 send_get_request(
                     f"{url}/models",
-                    request.app.state.config.OPENAI_API_KEYS[idx],
+                    key,
                     user=user,
                 )
             )
@@ -387,7 +406,7 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
                     request_tasks.append(
                         send_get_request(
                             f"{url}/models",
-                            request.app.state.config.OPENAI_API_KEYS[idx],
+                            key,
                             user=user,
                         )
                     )
@@ -411,6 +430,7 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
                     )
             else:
                 request_tasks.append(asyncio.ensure_future(asyncio.sleep(0, None)))
+
 
     responses = await asyncio.gather(*request_tasks)
 
@@ -461,10 +481,14 @@ async def get_filtered_models(models, user):
     for model in models.get("data", []):
         model_info = Models.get_model_by_id(model["id"])
         if model_info:
+            # 如果模型在Models表中注册，检查访问权限
             if user.id == model_info.user_id or has_access(
                 user.id, type="read", access_control=model_info.access_control
             ):
                 filtered_models.append(model)
+        else:
+            # 全局连接的模型（不在Models表中）对所有用户可见
+            filtered_models.append(model)
     return filtered_models
 
 
@@ -534,8 +558,8 @@ async def get_all_models(request: Request, user: UserModel) -> dict[str, list]:
     models = get_merged_models(map(extract_data, responses))
     log.debug(f"models: {models}")
 
-    request.app.state.OPENAI_MODELS = models
-    return {"data": list(models.values())}
+    # 返回models字典用于后续查找
+    return {"data": list(models.values()), "_models_dict": models}
 
 
 @router.get("/models")
@@ -548,7 +572,12 @@ async def get_models(
     }
 
     if url_idx is None:
-        models = await get_all_models(request, user=user)
+        all_models_result = await get_all_models(request, user=user)
+        # 更新OPENAI_MODELS状态
+        models_dict = all_models_result.get("_models_dict", {})
+        request.app.state.OPENAI_MODELS = models_dict
+        # 只返回data给客户端
+        models = {"data": all_models_result.get("data", [])}
     else:
         url = request.app.state.config.OPENAI_API_BASE_URLS[url_idx]
         key = request.app.state.config.OPENAI_API_KEYS[url_idx]
@@ -837,15 +866,13 @@ async def generate_chat_completion(
                     status_code=403,
                     detail="Model not found",
                 )
-    elif not bypass_filter:
-        if user.role != "admin":
-            raise HTTPException(
-                status_code=403,
-                detail="Model not found",
-            )
+    # 对于全局连接的模型，允许所有已验证用户访问（不需要检查model_info）
 
-    await get_all_models(request, user=user)
-    model = request.app.state.OPENAI_MODELS.get(model_id)
+    all_models_result = await get_all_models(request, user=user)
+    models_dict = all_models_result.get("_models_dict", {})
+    # 同时更新app.state以便其他地方使用
+    request.app.state.OPENAI_MODELS = models_dict
+    model = models_dict.get(model_id)
     if model:
         idx = model["urlIdx"]
     else:
@@ -866,6 +893,26 @@ async def generate_chat_completion(
     if prefix_id:
         payload["model"] = payload["model"].replace(f"{prefix_id}.", "")
 
+    # Add model identity system prompt for OpenAI API requests
+    model_name = payload.get("model", model_id)
+    model_identity_prompt = f"You are {model_name}."
+    messages = payload.get("messages", [])
+    if messages and messages[0].get("role") == "system":
+        # Prepend model identity to existing system message
+        existing_content = messages[0].get("content", "")
+        if isinstance(existing_content, str):
+            messages[0]["content"] = f"{model_identity_prompt}\n\n{existing_content}"
+        elif isinstance(existing_content, list):
+            # Handle list content format (multimodal)
+            for item in existing_content:
+                if item.get("type") == "text":
+                    item["text"] = f"{model_identity_prompt}\n\n{item.get('text', '')}"
+                    break
+    else:
+        # Insert new system message at the beginning
+        messages.insert(0, {"role": "system", "content": model_identity_prompt})
+    payload["messages"] = messages
+
     # Add user info to the payload if the model is a pipeline
     if "pipeline" in model and model.get("pipeline"):
         payload["user"] = {
@@ -876,7 +923,24 @@ async def generate_chat_completion(
         }
 
     url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
-    key = request.app.state.config.OPENAI_API_KEYS[idx]
+
+    # 密钥逻辑：管理员用管理员密钥，普通用户必须用自己的密钥
+    admin_key = request.app.state.config.OPENAI_API_KEYS[idx] if idx < len(request.app.state.config.OPENAI_API_KEYS) else ""
+    connection_id = get_connection_id_for_url_idx(request, idx)
+
+    if user.role == "admin":
+        # 管理员使用管理员配置的密钥
+        key = admin_key
+    else:
+        # 普通用户必须使用自己配置的密钥
+        user_key = get_user_api_key_for_connection(user, connection_id) if connection_id else None
+        key = user_key
+
+    if not key:
+        raise HTTPException(
+            status_code=401,
+            detail="请在设置 > 外部连接中配置对应的 API Key",
+        )
 
     # Check if model is a reasoning model that needs special handling
     if is_openai_reasoning_model(payload["model"]):
@@ -988,14 +1052,25 @@ async def embeddings(request: Request, form_data: dict, user):
     # Prepare payload/body
     body = json.dumps(form_data)
     # Find correct backend url/key based on model
-    await get_all_models(request, user=user)
+    all_models_result = await get_all_models(request, user=user)
+    models_dict = all_models_result.get("_models_dict", {})
+    request.app.state.OPENAI_MODELS = models_dict
     model_id = form_data.get("model")
-    models = request.app.state.OPENAI_MODELS
-    if model_id in models:
-        idx = models[model_id]["urlIdx"]
+    if model_id in models_dict:
+        idx = models_dict[model_id]["urlIdx"]
 
     url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
-    key = request.app.state.config.OPENAI_API_KEYS[idx]
+
+    # 密钥逻辑：管理员用管理员密钥，普通用户必须用自己的密钥
+    admin_key = request.app.state.config.OPENAI_API_KEYS[idx] if idx < len(request.app.state.config.OPENAI_API_KEYS) else ""
+    connection_id = get_connection_id_for_url_idx(request, idx)
+
+    if user.role == "admin":
+        key = admin_key
+    else:
+        user_key = get_user_api_key_for_connection(user, connection_id) if connection_id else None
+        key = user_key
+
     api_config = request.app.state.config.OPENAI_API_CONFIGS.get(
         str(idx),
         request.app.state.config.OPENAI_API_CONFIGS.get(url, {}),  # Legacy support
@@ -1064,7 +1139,17 @@ async def proxy(path: str, request: Request, user=Depends(get_verified_user)):
 
     idx = 0
     url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
-    key = request.app.state.config.OPENAI_API_KEYS[idx]
+
+    # 密钥逻辑：管理员用管理员密钥，普通用户必须用自己的密钥
+    admin_key = request.app.state.config.OPENAI_API_KEYS[idx] if idx < len(request.app.state.config.OPENAI_API_KEYS) else ""
+    connection_id = get_connection_id_for_url_idx(request, idx)
+
+    if user.role == "admin":
+        key = admin_key
+    else:
+        user_key = get_user_api_key_for_connection(user, connection_id) if connection_id else None
+        key = user_key
+
     api_config = request.app.state.config.OPENAI_API_CONFIGS.get(
         str(idx),
         request.app.state.config.OPENAI_API_CONFIGS.get(

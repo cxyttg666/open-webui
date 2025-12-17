@@ -63,6 +63,7 @@ def run_migrations():
         alembic_cfg.set_main_option("script_location", str(migrations_path))
 
         command.upgrade(alembic_cfg, "head")
+        log.info("Migrations completed successfully")
     except Exception as e:
         log.exception(f"Error running migrations: {e}")
 
@@ -1071,6 +1072,27 @@ OPENAI_API_CONFIGS = PersistentConfig(
     "OPENAI_API_CONFIGS",
     "openai.api_configs",
     {},
+)
+
+####################################
+# GLOBAL_CONNECTIONS (管理员配置的全局连接)
+####################################
+
+# 全局连接配置，管理员设置URL和基本信息，用户只配置自己的密钥
+# 格式: [
+#   {
+#     "id": "conn_1",
+#     "name": "OpenAI Official",
+#     "type": "openai",  # openai, ollama, custom
+#     "url": "https://api.openai.com/v1",
+#     "auth_type": "bearer",  # bearer, none, session, system_oauth
+#     "config": {...}  # 其他配置
+#   }
+# ]
+GLOBAL_CONNECTIONS = PersistentConfig(
+    "GLOBAL_CONNECTIONS",
+    "connections.global",
+    [],
 )
 
 # Get the actual OpenAI API key based on the base URL

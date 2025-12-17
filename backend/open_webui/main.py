@@ -72,6 +72,7 @@ from open_webui.routers import (
     images,
     ollama,
     openai,
+    anthropic,
     retrieval,
     pipelines,
     tasks,
@@ -93,6 +94,7 @@ from open_webui.routers import (
     users,
     utils,
     scim,
+    global_connections,
 )
 
 from open_webui.routers.retrieval import (
@@ -121,6 +123,8 @@ from open_webui.config import (
     OPENAI_API_CONFIGS,
     # Direct Connections
     ENABLE_DIRECT_CONNECTIONS,
+    # Global Connections
+    GLOBAL_CONNECTIONS,
     # Model list
     ENABLE_BASE_MODELS_CACHE,
     # Thread pool size for FastAPI/AnyIO
@@ -709,6 +713,45 @@ app.state.TOOL_SERVERS = []
 ########################################
 
 app.state.config.ENABLE_DIRECT_CONNECTIONS = ENABLE_DIRECT_CONNECTIONS
+
+########################################
+#
+# GLOBAL CONNECTIONS
+#
+########################################
+
+app.state.config.GLOBAL_CONNECTIONS = GLOBAL_CONNECTIONS
+
+# 启动时将全局连接同步到OPENAI_API配置
+def _sync_global_connections_to_openai():
+    """启动时同步全局连接到OPENAI配置"""
+    connections = app.state.config.GLOBAL_CONNECTIONS or []
+    log.info(f"[Global Connections Sync] Found {len(connections)} global connections")
+
+    openai_urls = []
+    openai_keys = []
+    openai_configs = {}
+
+    for conn in connections:
+        log.info(f"[Global Connections Sync] Processing connection: type={conn.get('type')}, url={conn.get('url')}")
+        if conn.get("type") == "openai":
+            openai_urls.append(conn.get("url", ""))
+            openai_keys.append(conn.get("api_key", ""))
+            idx = len(openai_urls) - 1
+            openai_configs[str(idx)] = conn.get("config") or {}
+
+    log.info(f"[Global Connections Sync] OpenAI URLs to sync: {openai_urls}")
+
+    if openai_urls:  # 只有在有全局连接时才覆盖
+        app.state.config.OPENAI_API_BASE_URLS = openai_urls
+        app.state.config.OPENAI_API_KEYS = openai_keys
+        app.state.config.OPENAI_API_CONFIGS = openai_configs
+        log.info(f"[Global Connections Sync] Synced {len(openai_urls)} OpenAI connections")
+    else:
+        log.info(f"[Global Connections Sync] No OpenAI connections to sync, keeping existing config")
+        log.info(f"[Global Connections Sync] Existing OPENAI_API_BASE_URLS: {app.state.config.OPENAI_API_BASE_URLS}")
+
+_sync_global_connections_to_openai()
 
 ########################################
 #
@@ -1364,6 +1407,7 @@ app.mount("/ws", socket_app)
 
 app.include_router(ollama.router, prefix="/ollama", tags=["ollama"])
 app.include_router(openai.router, prefix="/openai", tags=["openai"])
+app.include_router(anthropic.router, prefix="/anthropic", tags=["anthropic"])
 
 
 app.include_router(pipelines.router, prefix="/api/v1/pipelines", tags=["pipelines"])
@@ -1374,6 +1418,12 @@ app.include_router(audio.router, prefix="/api/v1/audio", tags=["audio"])
 app.include_router(retrieval.router, prefix="/api/v1/retrieval", tags=["retrieval"])
 
 app.include_router(configs.router, prefix="/api/v1/configs", tags=["configs"])
+
+app.include_router(
+    global_connections.router,
+    prefix="/api/v1/global_connections",
+    tags=["global_connections"],
+)
 
 app.include_router(auths.router, prefix="/api/v1/auths", tags=["auths"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
@@ -1521,10 +1571,17 @@ async def chat_completion(
     form_data: dict,
     user=Depends(get_verified_user),
 ):
+    log.info(f"[Chat Completion] Received request for model: {form_data.get('model')}")
+    log.info(f"[Chat Completion] MODELS state type: {type(request.app.state.MODELS)}, empty: {not request.app.state.MODELS}")
+
     if not request.app.state.MODELS:
+        log.info("[Chat Completion] MODELS is empty, calling get_all_models")
         await get_all_models(request, user=user)
+        log.info(f"[Chat Completion] After get_all_models, MODELS keys: {list(request.app.state.MODELS.keys()) if request.app.state.MODELS else 'empty'}")
 
     model_id = form_data.get("model", None)
+    log.info(f"[Chat Completion] Looking for model_id: {model_id}")
+    log.info(f"[Chat Completion] Available models: {list(request.app.state.MODELS.keys()) if request.app.state.MODELS else 'empty'}")
     model_item = form_data.pop("model_item", {})
     tasks = form_data.pop("background_tasks", None)
 

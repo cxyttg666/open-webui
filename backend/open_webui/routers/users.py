@@ -318,6 +318,51 @@ async def get_user_status_by_session_user(user=Depends(get_verified_user)):
 
 
 ############################
+# GetUserApiKeys - 获取用户的API密钥配置
+############################
+
+
+class UserApiKeysForm(BaseModel):
+    api_keys: dict  # {connection_id: api_key}
+
+
+@router.get("/user/api-keys")
+async def get_user_api_keys(user=Depends(get_verified_user)):
+    """获取用户配置的API密钥（用于与全局连接配合使用）"""
+    user_data = Users.get_user_by_id(user.id)
+    if user_data and user_data.settings:
+        return {"api_keys": user_data.settings.api_keys or {}}
+    return {"api_keys": {}}
+
+
+@router.post("/user/api-keys/update")
+async def update_user_api_keys(
+    form_data: UserApiKeysForm, user=Depends(get_verified_user)
+):
+    """更新用户的API密钥配置"""
+    user_data = Users.get_user_by_id(user.id)
+    if not user_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ERROR_MESSAGES.USER_NOT_FOUND,
+        )
+
+    # 获取当前设置
+    current_settings = user_data.settings.model_dump() if user_data.settings else {}
+    current_settings["api_keys"] = form_data.api_keys
+
+    # 更新设置
+    updated_user = Users.update_user_settings_by_id(user.id, current_settings)
+    if updated_user:
+        return {"success": True, "api_keys": form_data.api_keys}
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to update API keys",
+        )
+
+
+############################
 # UpdateUserStatusBySessionUser
 ############################
 
@@ -528,13 +573,18 @@ async def update_user_by_id(
     user = Users.get_user_by_id(user_id)
 
     if user:
-        if form_data.email.lower() != user.email:
-            email_user = Users.get_user_by_email(form_data.email.lower())
-            if email_user:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=ERROR_MESSAGES.EMAIL_TAKEN,
-                )
+        # Handle None email comparison
+        user_email_lower = user.email.lower() if user.email else None
+        form_email_lower = form_data.email.lower() if form_data.email else None
+
+        if form_email_lower != user_email_lower:
+            if form_email_lower:
+                email_user = Users.get_user_by_email(form_email_lower)
+                if email_user:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=ERROR_MESSAGES.EMAIL_TAKEN,
+                    )
 
         if form_data.password:
             try:
@@ -545,16 +595,16 @@ async def update_user_by_id(
             hashed = get_password_hash(form_data.password)
             Auths.update_user_password_by_id(user_id, hashed)
 
-        Auths.update_email_by_id(user_id, form_data.email.lower())
-        updated_user = Users.update_user_by_id(
-            user_id,
-            {
-                "role": form_data.role,
-                "name": form_data.name,
-                "email": form_data.email.lower(),
-                "profile_image_url": form_data.profile_image_url,
-            },
-        )
+        # Update user with optional email
+        update_data = {
+            "role": form_data.role,
+            "name": form_data.name,
+            "profile_image_url": form_data.profile_image_url,
+        }
+        if form_data.email:
+            update_data["email"] = form_data.email.lower()
+
+        updated_user = Users.update_user_by_id(user_id, update_data)
 
         if updated_user:
             return updated_user

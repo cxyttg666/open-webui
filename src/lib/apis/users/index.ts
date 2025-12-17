@@ -550,3 +550,65 @@ export const getUserGroupsById = async (token: string, userId: string) => {
 
 	return res;
 };
+
+// ==================== User API Keys ====================
+
+export const getUserApiKeys = async (token: string): Promise<{ api_keys: Record<string, string> }> => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/users/user/api-keys`, {
+		method: 'GET',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		}
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};
+
+export const updateUserApiKeys = async (
+	token: string,
+	apiKeys: Record<string, string>
+): Promise<{ success: boolean; api_keys: Record<string, string> }> => {
+	let error = null;
+
+	const res = await fetch(`${WEBUI_API_BASE_URL}/users/user/api-keys/update`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			Authorization: `Bearer ${token}`
+		},
+		body: JSON.stringify({
+			api_keys: apiKeys
+		})
+	})
+		.then(async (res) => {
+			if (!res.ok) throw await res.json();
+			return res.json();
+		})
+		.catch((err) => {
+			console.error(err);
+			error = err.detail;
+			return null;
+		});
+
+	if (error) {
+		throw error;
+	}
+
+	return res;
+};

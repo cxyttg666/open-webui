@@ -319,14 +319,14 @@ def user_to_scim(user: UserModel, request: Request) -> SCIMUser:
 
     return SCIMUser(
         id=user.id,
-        userName=user.email,
+        userName=user.email or user.username,
         name=SCIMName(
             formatted=user.name,
             givenName=given_name,
             familyName=family_name,
         ),
         displayName=user.name,
-        emails=[SCIMEmail(value=user.email)],
+        emails=[SCIMEmail(value=user.email)] if user.email else [],
         active=user.role != "pending",
         photos=(
             [SCIMPhoto(value=user.profile_image_url)]

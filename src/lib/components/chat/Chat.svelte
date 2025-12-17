@@ -1595,10 +1595,10 @@
 				return;
 			}
 
+			// 如果上一条消息有错误，清除错误状态，允许继续发送
 			if (lastMessage.error && !lastMessage.content) {
-				// Error in response
-				toast.error($i18n.t(`Oops! There was an error in the previous response.`));
-				return;
+				// 清除错误状态，继续发送新消息
+				delete lastMessage.error;
 			}
 		}
 

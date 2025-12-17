@@ -1,145 +1,126 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
-	import { createEventDispatcher, onMount, getContext, tick } from 'svelte';
-	import { getModels as _getModels } from '$lib/apis';
+	import { createEventDispatcher, onMount, getContext } from 'svelte';
 
 	const dispatch = createEventDispatcher();
 	const i18n = getContext('i18n');
 
-	import { models, settings, user } from '$lib/stores';
+	import { user } from '$lib/stores';
+	import { getGlobalConnections, type GlobalConnection } from '$lib/apis/connections';
+	import { getUserApiKeys, updateUserApiKeys } from '$lib/apis/users';
 
-	import Switch from '$lib/components/common/Switch.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
-	import Tooltip from '$lib/components/common/Tooltip.svelte';
-	import Plus from '$lib/components/icons/Plus.svelte';
-	import Connection from './Connections/Connection.svelte';
-
-	import AddConnectionModal from '$lib/components/AddConnectionModal.svelte';
 
 	export let saveSettings: Function;
 
-	let config = null;
-
-	let showConnectionModal = false;
-
-	const addConnectionHandler = async (connection) => {
-		config.OPENAI_API_BASE_URLS.push(connection.url);
-		config.OPENAI_API_KEYS.push(connection.key);
-		config.OPENAI_API_CONFIGS[config.OPENAI_API_BASE_URLS.length - 1] = connection.config;
-
-		await updateHandler();
-	};
-
-	const updateHandler = async () => {
-		// Remove trailing slashes
-		config.OPENAI_API_BASE_URLS = config.OPENAI_API_BASE_URLS.map((url) => url.replace(/\/$/, ''));
-
-		// Check if API KEYS length is same than API URLS length
-		if (config.OPENAI_API_KEYS.length !== config.OPENAI_API_BASE_URLS.length) {
-			// if there are more keys than urls, remove the extra keys
-			if (config.OPENAI_API_KEYS.length > config.OPENAI_API_BASE_URLS.length) {
-				config.OPENAI_API_KEYS = config.OPENAI_API_KEYS.slice(
-					0,
-					config.OPENAI_API_BASE_URLS.length
-				);
-			}
-
-			// if there are more urls than keys, add empty keys
-			if (config.OPENAI_API_KEYS.length < config.OPENAI_API_BASE_URLS.length) {
-				const diff = config.OPENAI_API_BASE_URLS.length - config.OPENAI_API_KEYS.length;
-				for (let i = 0; i < diff; i++) {
-					config.OPENAI_API_KEYS.push('');
-				}
-			}
-		}
-
-		await saveSettings({
-			directConnections: config
-		});
-	};
+	let loading = true;
+	let connections: GlobalConnection[] = [];
+	let userApiKeys: Record<string, string> = {};
 
 	onMount(async () => {
-		config = $settings?.directConnections ?? {
-			OPENAI_API_BASE_URLS: [],
-			OPENAI_API_KEYS: [],
-			OPENAI_API_CONFIGS: {}
-		};
+		await loadData();
 	});
-</script>
 
-<AddConnectionModal direct bind:show={showConnectionModal} onSubmit={addConnectionHandler} />
+	const loadData = async () => {
+		loading = true;
+		try {
+			// 加载全局连接列表
+			connections = await getGlobalConnections(localStorage.token);
+			// 加载用户的API密钥配置
+			const keysData = await getUserApiKeys(localStorage.token);
+			userApiKeys = keysData?.api_keys || {};
+		} catch (error) {
+			console.error('加载连接配置失败:', error);
+			toast.error($i18n.t('Failed to load connections'));
+		} finally {
+			loading = false;
+		}
+	};
+
+	const saveApiKeys = async () => {
+		try {
+			await updateUserApiKeys(localStorage.token, userApiKeys);
+			toast.success($i18n.t('API keys saved'));
+			dispatch('save');
+		} catch (error) {
+			console.error('保存API密钥失败:', error);
+			toast.error($i18n.t('Failed to save API keys'));
+		}
+	};
+
+	const getConnectionTypeLabel = (type: string) => {
+		const types: Record<string, string> = {
+			openai: 'OpenAI',
+			anthropic: 'Anthropic/Claude',
+			ollama: 'Ollama',
+			custom: $i18n.t('Custom')
+		};
+		return types[type] || type;
+	};
+
+	const getApiKeyLink = (url: string) => {
+		try {
+			const urlObj = new URL(url);
+			return `${urlObj.protocol}//${urlObj.host}`;
+		} catch {
+			return null;
+		}
+	};
+</script>
 
 <form
 	id="tab-connections"
 	class="flex flex-col h-full justify-between text-sm"
-	on:submit|preventDefault={() => {
-		updateHandler();
-	}}
+	on:submit|preventDefault={saveApiKeys}
 >
-	<div class=" overflow-y-scroll scrollbar-hidden h-full">
-		{#if config !== null}
-			<div class="">
-				<div class="pr-1.5">
-					<div class="">
-						<div class="flex justify-between items-center mb-0.5">
-							<div class="font-medium">{$i18n.t('Manage Direct Connections')}</div>
+	<div class="overflow-y-scroll scrollbar-hidden h-full">
+		{#if !loading}
+			<div class="space-y-4">
+				<div>
+					<div class="font-medium mb-2">{$i18n.t('API 连接信息')}</div>
 
-							<Tooltip content={$i18n.t(`Add Connection`)}>
-								<button
-									class="px-1"
-									on:click={() => {
-										showConnectionModal = true;
-									}}
-									type="button"
-								>
-									<Plus />
-								</button>
-							</Tooltip>
-						</div>
-
-						<div class="flex flex-col gap-1.5">
-							{#each config?.OPENAI_API_BASE_URLS ?? [] as url, idx}
-								<Connection
-									bind:url
-									bind:key={config.OPENAI_API_KEYS[idx]}
-									bind:config={config.OPENAI_API_CONFIGS[idx]}
-									onSubmit={() => {
-										updateHandler();
-									}}
-									onDelete={() => {
-										config.OPENAI_API_BASE_URLS = config.OPENAI_API_BASE_URLS.filter(
-											(url, urlIdx) => idx !== urlIdx
-										);
-										config.OPENAI_API_KEYS = config.OPENAI_API_KEYS.filter(
-											(key, keyIdx) => idx !== keyIdx
-										);
-
-										let newConfig = {};
-										config.OPENAI_API_BASE_URLS.forEach((url, newIdx) => {
-											newConfig[newIdx] =
-												config.OPENAI_API_CONFIGS[newIdx < idx ? newIdx : newIdx + 1];
-										});
-										config.OPENAI_API_CONFIGS = newConfig;
-									}}
-								/>
-							{/each}
-						</div>
-					</div>
-
-					<div class="my-1.5">
-						<div
-							class="text-xs {($settings?.highContrastMode ?? false)
-								? 'text-gray-800 dark:text-gray-100'
-								: 'text-gray-500'}"
-						>
-							{$i18n.t('Connect to your own OpenAI compatible API endpoints.')}
-							<br />
-							{$i18n.t(
-								'CORS must be properly configured by the provider to allow requests from Open WebUI.'
-							)}
-						</div>
-					</div>
 				</div>
+
+				{#if connections.length === 0}
+					<div class="text-center py-8 text-gray-500">
+						<div class="text-lg mb-2">{$i18n.t('No connections available')}</div>
+						<div class="text-sm">{$i18n.t('Please contact administrator to configure API connections.')}</div>
+					</div>
+				{:else}
+					<div class="space-y-3">
+						{#each connections as connection}
+							<div class="border dark:border-gray-700 rounded-lg p-4">
+								<div class="flex items-center gap-2 mb-3">
+									<div class="font-medium">{connection.name}</div>
+									<span class="text-xs px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800">
+										{getConnectionTypeLabel(connection.type)}
+									</span>
+								</div>
+
+								<div>
+									<label class="block text-sm font-medium mb-1">{$i18n.t('API密钥')}</label>
+									<input
+										type="password"
+										class="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+										placeholder={$i18n.t('请输入你的API密钥')}
+										bind:value={userApiKeys[connection.id]}
+									/>
+								</div>
+
+								{#if getApiKeyLink(connection.url)}
+									<div class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+										{$i18n.t('密钥获取链接')}：<a
+											href={getApiKeyLink(connection.url)}
+											target="_blank"
+											rel="noopener noreferrer"
+											class="text-blue-500 hover:text-blue-600 hover:underline"
+										>{getApiKeyLink(connection.url)}</a>
+									</div>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{/if}
 			</div>
 		{:else}
 			<div class="flex h-full justify-center">

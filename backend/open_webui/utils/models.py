@@ -7,7 +7,7 @@ from aiocache import cached
 from fastapi import Request
 
 from open_webui.socket.utils import RedisDict
-from open_webui.routers import openai, ollama
+from open_webui.routers import openai, ollama, anthropic
 from open_webui.functions import get_function_models
 
 
@@ -59,6 +59,12 @@ async def fetch_openai_models(request: Request, user: UserModel = None):
     return openai_response["data"]
 
 
+async def fetch_anthropic_models(request: Request, user: UserModel = None):
+    """获取Anthropic/Claude模型"""
+    anthropic_response = await anthropic.get_all_models(request, user=user)
+    return anthropic_response.get("data", [])
+
+
 async def get_all_base_models(request: Request, user: UserModel = None):
     openai_task = (
         fetch_openai_models(request, user)
@@ -70,13 +76,15 @@ async def get_all_base_models(request: Request, user: UserModel = None):
         if request.app.state.config.ENABLE_OLLAMA_API
         else asyncio.sleep(0, result=[])
     )
+    # Anthropic模型 - 检查是否有配置的anthropic连接
+    anthropic_task = fetch_anthropic_models(request, user)
     function_task = get_function_models(request)
 
-    openai_models, ollama_models, function_models = await asyncio.gather(
-        openai_task, ollama_task, function_task
+    openai_models, ollama_models, anthropic_models, function_models = await asyncio.gather(
+        openai_task, ollama_task, anthropic_task, function_task
     )
 
-    return function_models + openai_models + ollama_models
+    return function_models + openai_models + ollama_models + anthropic_models
 
 
 async def get_all_models(request, refresh: bool = False, user: UserModel = None):
@@ -351,6 +359,12 @@ def check_model_access(user, model):
     else:
         model_info = Models.get_model_by_id(model.get("id"))
         if not model_info:
+            # 模型不在Models表中，检查是否是全局连接的模型
+            # 全局连接的模型对所有已验证用户开放
+            connection_type = model.get("connection_type")
+            if connection_type in ("external", "local", None):
+                # 全局连接模型，允许访问
+                return
             raise Exception("Model not found")
         elif not (
             user.id == model_info.user_id
@@ -362,40 +376,7 @@ def check_model_access(user, model):
 
 
 def get_filtered_models(models, user):
+    # 移除权限过滤 - 所有用户都可以看到所有模型
     # Filter out models that the user does not have access to
-    if (
-        user.role == "user"
-        or (user.role == "admin" and not BYPASS_ADMIN_ACCESS_CONTROL)
-    ) and not BYPASS_MODEL_ACCESS_CONTROL:
-        filtered_models = []
-        user_group_ids = {group.id for group in Groups.get_groups_by_member_id(user.id)}
-        for model in models:
-            if model.get("arena"):
-                if has_access(
-                    user.id,
-                    type="read",
-                    access_control=model.get("info", {})
-                    .get("meta", {})
-                    .get("access_control", {}),
-                    user_group_ids=user_group_ids,
-                ):
-                    filtered_models.append(model)
-                continue
-
-            model_info = Models.get_model_by_id(model["id"])
-            if model_info:
-                if (
-                    (user.role == "admin" and BYPASS_ADMIN_ACCESS_CONTROL)
-                    or user.id == model_info.user_id
-                    or has_access(
-                        user.id,
-                        type="read",
-                        access_control=model_info.access_control,
-                        user_group_ids=user_group_ids,
-                    )
-                ):
-                    filtered_models.append(model)
-
-        return filtered_models
-    else:
-        return models
+    # 注释掉原有的权限检查逻辑，直接返回所有模型
+    return models

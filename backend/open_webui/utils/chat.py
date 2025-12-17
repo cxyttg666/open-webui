@@ -31,6 +31,10 @@ from open_webui.routers.ollama import (
     generate_chat_completion as generate_ollama_chat_completion,
 )
 
+from open_webui.routers.anthropic import (
+    generate_chat_completion as generate_anthropic_chat_completion,
+)
+
 from open_webui.routers.pipelines import (
     process_pipeline_inlet_filter,
     process_pipeline_outlet_filter,
@@ -278,6 +282,14 @@ async def generate_chat_completion(
                 )
             else:
                 return convert_response_ollama_to_openai(response)
+        elif model.get("owned_by") == "anthropic":
+            # Using Anthropic API endpoint
+            return await generate_anthropic_chat_completion(
+                request=request,
+                form_data=form_data,
+                user=user,
+                bypass_filter=bypass_filter,
+            )
         else:
             return await generate_openai_chat_completion(
                 request=request,

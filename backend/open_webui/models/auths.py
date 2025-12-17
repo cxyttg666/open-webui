@@ -20,14 +20,14 @@ class Auth(Base):
     __tablename__ = "auth"
 
     id = Column(String, primary_key=True, unique=True)
-    email = Column(String)
+    username = Column(String, unique=True)
     password = Column(Text)
     active = Column(Boolean)
 
 
 class AuthModel(BaseModel):
     id: str
-    email: str
+    username: str
     password: str
     active: bool = True
 
@@ -51,7 +51,7 @@ class SigninResponse(Token, UserProfileImageResponse):
 
 
 class SigninForm(BaseModel):
-    email: str
+    username: str
     password: str
 
 
@@ -71,7 +71,7 @@ class UpdatePasswordForm(BaseModel):
 
 class SignupForm(BaseModel):
     name: str
-    email: str
+    username: str
     password: str
     profile_image_url: Optional[str] = "/user.png"
 
@@ -83,7 +83,7 @@ class AddUserForm(SignupForm):
 class AuthsTable:
     def insert_new_auth(
         self,
-        email: str,
+        username: str,
         password: str,
         name: str,
         profile_image_url: str = "/user.png",
@@ -96,13 +96,13 @@ class AuthsTable:
             id = str(uuid.uuid4())
 
             auth = AuthModel(
-                **{"id": id, "email": email, "password": password, "active": True}
+                **{"id": id, "username": username, "password": password, "active": True}
             )
             result = Auth(**auth.model_dump())
             db.add(result)
 
             user = Users.insert_new_user(
-                id, name, email, profile_image_url, role, oauth=oauth
+                id, name, username, profile_image_url, role, oauth=oauth
             )
 
             db.commit()
@@ -114,11 +114,11 @@ class AuthsTable:
                 return None
 
     def authenticate_user(
-        self, email: str, verify_password: callable
+        self, username: str, verify_password: callable
     ) -> Optional[UserModel]:
-        log.info(f"authenticate_user: {email}")
+        log.info(f"authenticate_user: {username}")
 
-        user = Users.get_user_by_email(email)
+        user = Users.get_user_by_username(username)
         if not user:
             return None
 
@@ -147,11 +147,11 @@ class AuthsTable:
         except Exception:
             return False
 
-    def authenticate_user_by_email(self, email: str) -> Optional[UserModel]:
-        log.info(f"authenticate_user_by_email: {email}")
+    def authenticate_user_by_username(self, username: str) -> Optional[UserModel]:
+        log.info(f"authenticate_user_by_username: {username}")
         try:
             with get_db() as db:
-                auth = db.query(Auth).filter_by(email=email, active=True).first()
+                auth = db.query(Auth).filter_by(username=username, active=True).first()
                 if auth:
                     user = Users.get_user_by_id(auth.id)
                     return user
@@ -169,10 +169,10 @@ class AuthsTable:
         except Exception:
             return False
 
-    def update_email_by_id(self, id: str, email: str) -> bool:
+    def update_username_by_id(self, id: str, username: str) -> bool:
         try:
             with get_db() as db:
-                result = db.query(Auth).filter_by(id=id).update({"email": email})
+                result = db.query(Auth).filter_by(id=id).update({"username": username})
                 db.commit()
                 return True if result == 1 else False
         except Exception:

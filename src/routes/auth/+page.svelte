@@ -30,7 +30,7 @@
 	let form = null;
 
 	let name = '';
-	let email = '';
+	let username = '';
 	let password = '';
 	let confirmPassword = '';
 
@@ -57,7 +57,7 @@
 	};
 
 	const signInHandler = async () => {
-		const sessionUser = await userSignIn(email, password).catch((error) => {
+		const sessionUser = await userSignIn(username, password).catch((error) => {
 			toast.error(`${error}`);
 			return null;
 		});
@@ -73,7 +73,9 @@
 			}
 		}
 
-		const sessionUser = await userSignUp(name, email, password, generateInitialsImage(name)).catch(
+		// 如果没有填写名称，使用用户名作为名称
+		const displayName = name || username;
+		const sessionUser = await userSignUp(displayName, username, password, generateInitialsImage(displayName)).catch(
 			(error) => {
 				toast.error(`${error}`);
 				return null;
@@ -270,7 +272,7 @@
 										{#if mode === 'signup'}
 											<div class="mb-2">
 												<label for="name" class="text-sm font-medium text-left mb-1 block"
-													>{$i18n.t('Name')}</label
+													>{$i18n.t('Name')} <span class="text-gray-400">({$i18n.t('Optional')})</span></label
 												>
 												<input
 													bind:value={name}
@@ -278,8 +280,7 @@
 													id="name"
 													class="my-0.5 w-full text-sm outline-hidden bg-transparent placeholder:text-gray-300 dark:placeholder:text-gray-600"
 													autocomplete="name"
-													placeholder={$i18n.t('Enter Your Full Name')}
-													required
+													placeholder={$i18n.t('Leave empty to use username')}
 												/>
 											</div>
 										{/if}
@@ -302,17 +303,17 @@
 											</div>
 										{:else}
 											<div class="mb-2">
-												<label for="email" class="text-sm font-medium text-left mb-1 block"
-													>{$i18n.t('Email')}</label
+												<label for="username" class="text-sm font-medium text-left mb-1 block"
+													>{$i18n.t('Username')}</label
 												>
 												<input
-													bind:value={email}
-													type="email"
-													id="email"
+													bind:value={username}
+													type="text"
+													id="username"
 													class="my-0.5 w-full text-sm outline-hidden bg-transparent placeholder:text-gray-300 dark:placeholder:text-gray-600"
-													autocomplete="email"
-													name="email"
-													placeholder={$i18n.t('Enter Your Email')}
+													autocomplete="username"
+													name="username"
+													placeholder={$i18n.t('Enter Your Username')}
 													required
 												/>
 											</div>
@@ -549,7 +550,7 @@
 									>
 										<span
 											>{mode === 'ldap'
-												? $i18n.t('Continue with Email')
+												? $i18n.t('Continue with Username')
 												: $i18n.t('Continue with LDAP')}</span
 										>
 									</button>

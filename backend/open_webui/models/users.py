@@ -38,6 +38,7 @@ import datetime
 
 class UserSettings(BaseModel):
     ui: Optional[dict] = {}
+    api_keys: Optional[dict] = {}  # 用户自定义的API密钥 {connection_id: api_key}
     model_config = ConfigDict(extra="allow")
     pass
 
@@ -46,8 +47,8 @@ class User(Base):
     __tablename__ = "user"
 
     id = Column(String, primary_key=True, unique=True)
-    email = Column(String)
-    username = Column(String(50), nullable=True)
+    email = Column(String, nullable=True)
+    username = Column(String(50), unique=True, nullable=False)
     role = Column(String)
 
     name = Column(String)
@@ -78,8 +79,8 @@ class User(Base):
 class UserModel(BaseModel):
     id: str
 
-    email: str
-    username: Optional[str] = None
+    email: Optional[str] = None
+    username: str
     role: str = "pending"
 
     name: str
@@ -181,7 +182,7 @@ class UserStatus(BaseModel):
 class UserInfoResponse(UserStatus):
     id: str
     name: str
-    email: str
+    email: Optional[str] = None
     role: str
 
 
@@ -213,11 +214,11 @@ class UserNameResponse(BaseModel):
 
 
 class UserResponse(UserNameResponse):
-    email: str
+    email: Optional[str] = None
 
 
 class UserProfileImageResponse(UserNameResponse):
-    email: str
+    email: Optional[str] = None
     profile_image_url: str
 
 
@@ -229,7 +230,7 @@ class UserRoleUpdateForm(BaseModel):
 class UserUpdateForm(BaseModel):
     role: str
     name: str
-    email: str
+    email: Optional[str] = None
     profile_image_url: str
     password: Optional[str] = None
 
@@ -239,7 +240,7 @@ class UsersTable:
         self,
         id: str,
         name: str,
-        email: str,
+        username: str,
         profile_image_url: str = "/user.png",
         role: str = "pending",
         oauth: Optional[dict] = None,
@@ -248,7 +249,7 @@ class UsersTable:
             user = UserModel(
                 **{
                     "id": id,
-                    "email": email,
+                    "username": username,
                     "name": name,
                     "role": role,
                     "profile_image_url": profile_image_url,
@@ -296,6 +297,14 @@ class UsersTable:
         except Exception:
             return None
 
+    def get_user_by_username(self, username: str) -> Optional[UserModel]:
+        try:
+            with get_db() as db:
+                user = db.query(User).filter_by(username=username).first()
+                return UserModel.model_validate(user) if user else None
+        except Exception:
+            return None
+
     def get_user_by_oauth_sub(self, provider: str, sub: str) -> Optional[UserModel]:
         try:
             with get_db() as db:  # type: Session
@@ -331,7 +340,7 @@ class UsersTable:
                     query = query.filter(
                         or_(
                             User.name.ilike(f"%{query_key}%"),
-                            User.email.ilike(f"%{query_key}%"),
+                            User.username.ilike(f"%{query_key}%"),
                         )
                     )
 

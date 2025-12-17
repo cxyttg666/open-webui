@@ -196,7 +196,7 @@ async def update_password(
         raise HTTPException(400, detail=ERROR_MESSAGES.ACTION_PROHIBITED)
     if session_user:
         user = Auths.authenticate_user(
-            session_user.email, lambda pw: verify_password(form_data.password, pw)
+            session_user.username, lambda pw: verify_password(form_data.password, pw)
         )
 
         if user:
@@ -530,10 +530,10 @@ async def signin(request: Request, response: Response, form_data: SigninForm):
             await signup(
                 request,
                 response,
-                SignupForm(email=email, password=str(uuid.uuid4()), name=name),
+                SignupForm(username=email, password=str(uuid.uuid4()), name=name),
             )
 
-        user = Auths.authenticate_user_by_email(email)
+        user = Auths.authenticate_user_by_username(email)
         if WEBUI_AUTH_TRUSTED_GROUPS_HEADER and user and user.role != "admin":
             group_names = request.headers.get(
                 WEBUI_AUTH_TRUSTED_GROUPS_HEADER, ""
@@ -544,12 +544,12 @@ async def signin(request: Request, response: Response, form_data: SigninForm):
                 Groups.sync_groups_by_group_names(user.id, group_names)
 
     elif WEBUI_AUTH == False:
-        admin_email = "admin@localhost"
+        admin_username = "admin"
         admin_password = "admin"
 
-        if Users.get_user_by_email(admin_email.lower()):
+        if Users.get_user_by_username(admin_username):
             user = Auths.authenticate_user(
-                admin_email.lower(), lambda pw: verify_password(admin_password, pw)
+                admin_username, lambda pw: verify_password(admin_password, pw)
             )
         else:
             if Users.has_users():
@@ -558,14 +558,14 @@ async def signin(request: Request, response: Response, form_data: SigninForm):
             await signup(
                 request,
                 response,
-                SignupForm(email=admin_email, password=admin_password, name="User"),
+                SignupForm(username=admin_username, password=admin_password, name="User"),
             )
 
             user = Auths.authenticate_user(
-                admin_email.lower(), lambda pw: verify_password(admin_password, pw)
+                admin_username, lambda pw: verify_password(admin_password, pw)
             )
     else:
-        if signin_rate_limiter.is_limited(form_data.email.lower()):
+        if signin_rate_limiter.is_limited(form_data.username.lower()):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=ERROR_MESSAGES.RATE_LIMIT_EXCEEDED,
@@ -581,7 +581,7 @@ async def signin(request: Request, response: Response, form_data: SigninForm):
             form_data.password = password_bytes.decode("utf-8", errors="ignore")
 
         user = Auths.authenticate_user(
-            form_data.email.lower(), lambda pw: verify_password(form_data.password, pw)
+            form_data.username.lower(), lambda pw: verify_password(form_data.password, pw)
         )
 
     if user:
@@ -655,12 +655,7 @@ async def signup(request: Request, response: Response, form_data: SignupForm):
                 status.HTTP_403_FORBIDDEN, detail=ERROR_MESSAGES.ACCESS_PROHIBITED
             )
 
-    if not validate_email_format(form_data.email.lower()):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, detail=ERROR_MESSAGES.INVALID_EMAIL_FORMAT
-        )
-
-    if Users.get_user_by_email(form_data.email.lower()):
+    if Users.get_user_by_username(form_data.username.lower()):
         raise HTTPException(400, detail=ERROR_MESSAGES.EMAIL_TAKEN)
 
     try:
@@ -673,7 +668,7 @@ async def signup(request: Request, response: Response, form_data: SignupForm):
 
         role = "admin" if not has_users else request.app.state.config.DEFAULT_USER_ROLE
         user = Auths.insert_new_auth(
-            form_data.email.lower(),
+            form_data.username.lower(),
             hashed,
             form_data.name,
             form_data.profile_image_url,
@@ -838,12 +833,7 @@ async def signout(request: Request, response: Response):
 async def add_user(
     request: Request, form_data: AddUserForm, user=Depends(get_admin_user)
 ):
-    if not validate_email_format(form_data.email.lower()):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, detail=ERROR_MESSAGES.INVALID_EMAIL_FORMAT
-        )
-
-    if Users.get_user_by_email(form_data.email.lower()):
+    if Users.get_user_by_username(form_data.username.lower()):
         raise HTTPException(400, detail=ERROR_MESSAGES.EMAIL_TAKEN)
 
     try:
@@ -854,7 +844,7 @@ async def add_user(
 
         hashed = get_password_hash(form_data.password)
         user = Auths.insert_new_auth(
-            form_data.email.lower(),
+            form_data.username.lower(),
             hashed,
             form_data.name,
             form_data.profile_image_url,
